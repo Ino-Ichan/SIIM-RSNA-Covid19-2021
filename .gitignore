@@ -9,3 +9,9 @@ export
 .Trash-0/
 
 __pycache__
+
+.ipynb_checkpoints
+
+.neptune
+
+wandb

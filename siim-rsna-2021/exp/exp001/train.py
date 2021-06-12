@@ -25,7 +25,8 @@ from src.logger import setup_logger, LOGGER
 from src.meter import mAPMeter, AUCMeter, APMeter, AverageValueMeter
 from src.utils import plot_sample_images
 
-import neptune.new as neptune
+# import neptune.new as neptune
+import wandb
 import pydicom
 
 import time
@@ -185,7 +186,7 @@ class CustomDataset(Dataset):
 # one epoch
 # =============================================================================
 
-def train_one_epoch(train_dataloader, model, device, criterion, use_amp, run, meters_dict, mode="train"):
+def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, meters_dict, mode="train"):
 
     train_time = time.time()
     LOGGER.info("")
@@ -237,12 +238,15 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, run, me
     LOGGER.info(f"Train mAP: {meters_dict['AP'].value().mean()}")
     LOGGER.info(f"Train time: {(time.time() - train_time) / 60:.3f} min")
 
-    run[f"Loss/train"].log(meters_dict['loss'].value()[0])
-    run[f"mAP/train"].log(meters_dict['AP'].value().mean())
-    run[f"mAP_metrics/train"].log((2 * meters_dict['AP'].value().mean()) / 3)
+    wandb.log({
+        "epoch": e,
+        "Loss/train": meters_dict['loss'].value()[0],
+        "mAP/train": meters_dict['AP'].value().mean(),
+        "mAP_metrics/train": (2 * meters_dict['AP'].value().mean()) / 3,
+    })
 
 
-def val_one_epoch(val_dataloader, model, device, run, meters_dict, mode="val"):
+def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val"):
 
     val_time = time.time()
     progress_bar = tqdm(val_dataloader)
@@ -277,12 +281,16 @@ def val_one_epoch(val_dataloader, model, device, run, meters_dict, mode="val"):
     LOGGER.info(f"Val mAP score: {(2 * meters_dict['AP'].value().mean()) / 3}")
     LOGGER.info(f"Val time: {(time.time() - val_time) / 60:.3f} min")
 
-    run[f"Loss/val"].log(meters_dict['loss'].value()[0])
-    run[f"mAP/val"].log(meters_dict['AP'].value().mean())
-    run[f"mAP_metrics/val"].log((2 * meters_dict['AP'].value().mean()) / 3)
-
+    log_dict = {
+        "epoch": e,
+        "Loss/val": meters_dict['loss'].value()[0],
+        "mAP/val": meters_dict['AP'].value().mean(),
+        "mAP_metrics/val": (2 * meters_dict['AP'].value().mean()) / 3
+    }
+ 
     for n_t, t in enumerate(target_columns):
-        run[f"AP_{t}/val"].log(meters_dict['AP'].value()[n_t])
+        log_dict[f"AP_{t}/val"] = meters_dict['AP'].value()[n_t]
+    wandb.log(log_dict)
 
     return meters_dict['AP'].value().mean()
 
@@ -347,6 +355,21 @@ def get_train_transforms(image_size):
           ToTensorV2(p=1)
 ])
 
+
+def get_train_transforms2(image_size):
+    return albumentations.Compose([
+           albumentations.ShiftScaleRotate(rotate_limit=30, p=0.5),
+           albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
+           albumentations.HorizontalFlip(p=0.5),
+           albumentations.RandomBrightnessContrast(brightness_limit=(-0.1,0.1), contrast_limit=(-0.1, 0.1), p=0.5),
+           albumentations.OneOf([
+               albumentations.GaussNoise(),
+               albumentations.MotionBlur(blur_limit=3),
+           ], p=0.1),
+          albumentations.Resize(image_size, image_size),
+          albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=2, p=0.5),
+          ToTensorV2(p=1)
+])
 
 
 def get_val_transforms(image_size):
@@ -454,11 +477,10 @@ if __name__ == "__main__":
         LOGGER.info(f'# Start CV: {cv}')
         LOGGER.info('# ===============================================================================')
 
-        # neptune.ai
-        run = neptune.init(project='inoichan/siim-rsna-covid19-2021', name=cfg['exp_name'], tags=[cfg['exp_name'], f"cv{cv}"])
-
-        run["parameters"] = cfg
-
+        # wandb
+        wandb.init(config=cfg, tags=[cfg['exp_name'], f"cv{cv}", model_name],
+                   project='siim-rsna-covid19-2021', entity='inoichan',
+                   name=f"{cfg['exp_name']}_cv{cv}_{model_name}", reinit=True)
 
         df_train = df[df.cv != cv].reset_index(drop=True)
         df_val = df[df.cv == cv].reset_index(drop=True)
@@ -513,6 +535,8 @@ if __name__ == "__main__":
             LOGGER.info(f"Training from scratch..")
         LOGGER.info("-" * 10)
 
+        # wandb misc
+        wandb.watch(model)
 
         # ==== TRAIN LOOP
 
@@ -527,12 +551,23 @@ if __name__ == "__main__":
 
         for e in range(start_epoch , start_epoch + n_epochs):
 
+            if e == 15:
+                # weak aug transform
+                train_transform = get_train_transforms2(img_size)
+                train_dataset = CustomDataset(df=df_train, image_size=img_size, clahe=clahe, mix=mix,
+                                            transform=train_transform, use_npy=use_npy, mode="train")
+                train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                                            pin_memory=False, num_workers=n_workers, drop_last=True)
+                plot_sample_images(train_dataset, sample_img_path, "train_clean", normalize=None)
+
             if e > 0:
-                run["Learning Rate"].log(optimizer.param_groups[0]["lr"])
+                wandb.log({
+                    "Learning Rate": optimizer.param_groups[0]["lr"],
+                    "epoch": e
+                })
+                train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, meters_dict)
 
-                train_one_epoch(train_dataloader, model, device, criterion, use_amp, run, meters_dict)
-
-            score = val_one_epoch(val_dataloader, model, device, run, meters_dict)
+            score = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
             scheduler.step()
 
             LOGGER.info('Saving last model ...')
@@ -556,8 +591,6 @@ if __name__ == "__main__":
                     "optimizer": optimizer.state_dict()
                 }, model_save_path)
 
-                run["best_weight"].upload(model_save_path)
-
                 early_stopping_cnt = 0
             else:
                 # early stopping
@@ -571,30 +604,16 @@ if __name__ == "__main__":
             LOGGER.info('-' * 20)
 
         best_eval_score_list.append(best)
-        run["Best mAP"] = best
-        run.stop()
+        wandb.log({
+            "Best mAP": best,
+            "Best mAP metrics": (2 * best) / 3,
+        })
 
     #######################################
     ## Save oof
     #######################################
-    # np.save(os.path.join(oof_path, "oof"), oof)
-    # targets_list = oof
-    # pred_list = df.loc[:, target_columns].values
-    # each_score = []
-    # if debug:
-    #     targets_list = np.random.random(pred_list.shape)
-    #     targets_list = np.where(targets_list > 0.5, 1, 0)
-    # for i in range(len(target_columns)):
-    #     each_score.append(average_precision_score(targets_list[:, i], pred_list[:, i]))
     mean_score = np.mean(best_eval_score_list)
-
-    with neptune.init(project='inoichan/siim-rsna-covid19-2021', name=cfg['exp_name'], tags=[cfg['exp_name'], f"cv_all"]) as run:
-        LOGGER.info('-' * 20)
-        LOGGER.info(f'Oof score: {mean_score}')
-        run["mAP"] = mean_score
-        run["mAP_score"] = (2 * mean_score) / 3
-        # for i, t in enumerate(target_columns):
-        #     LOGGER.info(f'{t} score: {each_score[i]}')
-        #     run[f"AP {t}"] = each_score[i]
-        LOGGER.info('-' * 20)
+    LOGGER.info('-' * 20)
+    LOGGER.info(f'Oof score: {mean_score}')
+    LOGGER.info('-' * 20)
 

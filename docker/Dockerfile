@@ -13,3 +13,4 @@ RUN pip install pydicom==2.1.2 pylibjpeg==1.3.0 pylibjpeg-libjpeg==1.2.0
 RUN pip install numpy==1.20.0
 RUN pip install neptune-client==0.9.16
 RUN pip install iterative-stratification==0.1.6
+RUN pip install wandb==0.10.31
