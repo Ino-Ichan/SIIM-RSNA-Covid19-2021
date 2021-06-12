@@ -22,4 +22,6 @@ docker run -it --rm --name siim_rsna_study\
  siim-rsna-2021:study_v0
 ```
 
+# Create directory
 
+Please create `./data`, `./output` directory 
