@@ -2,6 +2,12 @@
 
 ## environment
 
+#### Clone repository
+
+```
+git clone --recursive git@github.com:Ino-Ichan/SIIM-RSNA-Covid19-2021.git
+```
+
 #### Docker build
 ```
 docker build -t siim-rsna-2021:study_v0 -f docker/Dockerfile docker/
