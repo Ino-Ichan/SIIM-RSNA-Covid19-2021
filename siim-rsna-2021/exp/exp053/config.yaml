@@ -5,7 +5,8 @@ debug: false
 # exp_name: "exp031"
 # exp_name: "exp038"
 # exp_name: "exp039"
-exp_name: "exp041"
+# exp_name: "exp052"
+exp_name: "exp053"
 model_name: "swin_base_patch4_window12_384"
 device_id: 0
 batch_size: 16
@@ -15,7 +16,7 @@ n_epochs: 30
 start_epoch: 1
 transform: true
 
-initial_lr: 1e-4
+initial_lr: 5e-5
 final_lr: 1e-5
 
 load_checkpoint:
@@ -26,17 +27,17 @@ load_checkpoint:
   - ""
 
 hold_out:
-  # - 0
-  # - 1
-  # - 2
-  # - 3
+  - 0
+  - 1
+  - 2
+  - 3
   - 4
 
-df_train_path: "/workspace/data/df_train_study_level_npy640_2.csv"
+df_train_path: "/workspace/data/df_train_study_level_npy640_2_another.csv"
 
 accumulation_steps: 1
 early_stopping_steps: 10
-freeze_bn: true
+freeze_bn: false
 
 fold_name: 'cv'
 

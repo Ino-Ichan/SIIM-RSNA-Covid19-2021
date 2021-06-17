@@ -173,6 +173,76 @@
 # exp=exp043
 # python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
 
-# invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch
-exp=exp044
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch
+# exp=exp044
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp042, hard -> light aug adjust cv1 epoch
+# exp=exp045
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp042, hard cv1, 2, lr 5e-5 -> 1e-6, few cutout holes
+# exp=exp046
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp042, hard cv1, 2, lr 5e-5 -> 1e-6, one cycle lr, few cutout holes
+# exp=exp047
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp046, middle aug(-distort), cv1, 2, lr 5e-5 -> 1e-6, few cutout holes
+# exp=exp048
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp047, hard cv1, 2, lr 5e-5 -> 1e-6, one cycle lr, few cutout holes
+# exp=exp049
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp047, hard cv1, 2, lr 5e-5 -> 1e-6, one cycle lr, few cutout holes, bug fix
+# exp=exp050
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp046, hard 5 folds, lr 5e-5 -> 1e-6, few cutout holes
+# exp=exp051
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch, another split
+# exp=exp052
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch, another split
+# exp=exp053
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch, weight class
+# exp=exp054
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch, freeze bn
+# exp=exp055
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp041, middle aug(-distort) adjust 5 epoch, dropout=0.2
+# exp=exp056
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# ================================================================================================================================
+# Maskを使った実験
+# ================================================================================================================================
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp039, middle aug(-distort) adjust 5 epoch, with mask pretrain
+# exp=exp101
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # invert white/blackなし, swin_base_patch4_window12_384, from exp039, middle aug(-distort) adjust 5 epoch, with mask pretrain -> emb finetune
+# exp=exp101_2nd
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# invert white/blackなし, swin_base_patch4_window12_384, from exp039, middle aug(-distort) adjust 5 epoch, with mask pretrain, input change
+exp=exp102
 python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# invert white/blackなし, swin_base_patch4_window12_384, from exp039, middle aug(-distort) adjust 5 epoch, with mask pretrain -> emb finetune
+exp=exp102_2nd
+python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+

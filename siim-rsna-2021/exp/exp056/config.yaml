@@ -5,7 +5,8 @@ debug: false
 # exp_name: "exp031"
 # exp_name: "exp038"
 # exp_name: "exp039"
-exp_name: "exp041"
+# exp_name: "exp041"
+exp_name: "exp056"
 model_name: "swin_base_patch4_window12_384"
 device_id: 0
 batch_size: 16
@@ -26,11 +27,11 @@ load_checkpoint:
   - ""
 
 hold_out:
-  # - 0
-  # - 1
-  # - 2
-  # - 3
   - 4
+  - 3
+  - 2
+  - 1
+  - 0
 
 df_train_path: "/workspace/data/df_train_study_level_npy640_2.csv"
 
