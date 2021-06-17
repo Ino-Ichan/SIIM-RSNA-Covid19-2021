@@ -1,0 +1,5 @@
+names:
+- opacity
+nc: 1
+train: /workspace/exp_yolo/config_000/train_0.txt
+val: /workspace/exp_yolo/config_000/val_0.txt
