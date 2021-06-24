@@ -1,0 +1,9 @@
+[submodule "Swin-Transformer-Object-Detection"]
+	path = Swin-Transformer-Object-Detection
+	url = https://github.com/SwinTransformer/Swin-Transformer-Object-Detection
+[submodule "customized_mmdetection"]
+	path = customized_mmdetection
+	url = https://github.com/Ino-Ichan/customized_mmdetection
+[submodule "customized_yolov5"]
+	path = customized_yolov5
+	url = https://github.com/Ino-Ichan/customized_yolov5
