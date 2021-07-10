@@ -24,6 +24,7 @@ sys.path.append('/workspace/siim-rsna-2021')
 from src.logger import setup_logger, LOGGER
 from src.meter import mAPMeter, AUCMeter, APMeter, AverageValueMeter
 from src.utils import plot_sample_images
+from src.segloss import SymmetricLovaszLoss
 
 # import neptune.new as neptune
 import wandb
@@ -36,9 +37,6 @@ import timm
 
 import warnings
 
-target_columns = [
-    "Negative for Pneumonia", "Typical Appearance", "Indeterminate Appearance", "Atypical Appearance", "is_none"
-]
 
 
 @contextmanager
@@ -79,52 +77,24 @@ def set_bn_eval(m):
 # Model
 # =============================================================================
 
-# class Net(nn.Module):
-#     def __init__(self, name="resnest101e"):
-#         super(Net, self).__init__()
-#         self.model = timm.create_model(name, pretrained=True, num_classes=len(target_columns))
+import segmentation_models_pytorch as smp
 
-#     def forward(self, x):
-#         x = self.model(x).squeeze(-1)
-#         return x
-
-n_ch = 3
 
 class Net(nn.Module):
     def __init__(self, name="resnest101e"):
         super(Net, self).__init__()
-        self.enet = timm.create_model(name, True)
-        self.dropout = nn.Dropout(0.5)
-        # self.enet.conv_stem.weight = nn.Parameter(self.enet.conv_stem.weight.repeat(1,n_ch//3+1,1,1)[:, :n_ch])
-        self.myfc = nn.Linear(self.enet.classifier.in_features, len(target_columns))
-        self.enet.classifier = nn.Identity()
+        self.model = smp.Unet(
+            encoder_name=name,  # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
+            encoder_weights="imagenet",  # use `imagenet` pre-trained weights for encoder initialization
+            in_channels=3,  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
+            classes=1,  # model output channels (number of classes in your dataset)
+            activation=None
+        )
 
-    def extract(self, x):
-        return self.enet(x)
 
     def forward(self, x):
-        x = self.extract(x)
-        h = self.myfc(self.dropout(x))
-        return h
-
-from warmup_scheduler import GradualWarmupScheduler
-
-class GradualWarmupSchedulerV2(GradualWarmupScheduler):
-    def __init__(self, optimizer, multiplier, total_epoch, after_scheduler=None):
-        super(GradualWarmupSchedulerV2, self).__init__(optimizer, multiplier, total_epoch, after_scheduler)
-    def get_lr(self):
-        if self.last_epoch > self.total_epoch:
-            if self.after_scheduler:
-                if not self.finished:
-                    self.after_scheduler.base_lrs = [base_lr * self.multiplier for base_lr in self.base_lrs]
-                    self.finished = True
-                return self.after_scheduler.get_lr()
-            return [base_lr * self.multiplier for base_lr in self.base_lrs]
-        if self.multiplier == 1.0:
-            return [base_lr * (float(self.last_epoch) / self.total_epoch) for base_lr in self.base_lrs]
-        else:
-            return [base_lr * ((self.multiplier - 1.) * self.last_epoch / self.total_epoch + 1.) for base_lr in self.base_lrs]
-
+        x = self.model(x)
+        return x
 
 # =============================================================================
 # Dataset
@@ -174,6 +144,7 @@ class CutoutV2(albumentations.DualTransform):
     def get_transform_init_args_names(self):
         return ("num_holes", "max_h_size", "max_w_size")
 
+
 class CustomDataset(Dataset):
     def __init__(self,
                  df,
@@ -185,7 +156,7 @@ class CustomDataset(Dataset):
                  use_npy=False,
                  ):
 
-        self.df = df.reset_index(drop=True)
+        self.df = df
         self.image_size = image_size
         self.transform = transform
 
@@ -195,7 +166,6 @@ class CustomDataset(Dataset):
         if self.clahe or self.mix:
             self.clahe_transform = cv2.createCLAHE(clipLimit=10.0, tileGridSize=(16, 16))
 
-        self.cols = target_columns
         self.use_npy = use_npy
 
     def __len__(self):
@@ -204,42 +174,18 @@ class CustomDataset(Dataset):
     def __getitem__(self, index):
         row = self.df.iloc[index]
 
-        if self.use_npy:
-            # images = np.load(row.npy_path)
-            images = cv2.imread(row.npy_path)
-        else:
-            images = pydicom.read_file(row.dicom_path).pixel_array
+        images = cv2.imread(row.img_path)
+        mask = cv2.imread(row.mask_path, cv2.IMREAD_GRAYSCALE)
 
-        if self.clahe:
-            single_channel = images[:, :, 0].astype(np.uint8)
-            single_channel = self.clahe_transform.apply(single_channel)
-            images = np.array([
-                single_channel,
-                single_channel,
-                single_channel
-            ]).transpose(1, 2, 0)
-        elif self.mix:
-            single_channel = images[:, :, 0].astype(np.uint8)
-            clahe_channel = self.clahe_transform.apply(single_channel)
-            hist_channel = cv2.equalizeHist(single_channel)
-            images = np.array([
-                single_channel,
-                clahe_channel,
-                hist_channel
-            ]).transpose(1, 2, 0)
+        aug = self.transform(image=images, mask=mask)                
+        images_only = aug['image'].astype(np.float32).transpose(2, 0, 1) / 255                
+        mask = aug['mask'].astype(np.float32) / 255
 
-        if self.transform is not None:
-            images = self.transform(image=images)['image'] / 255                
-        else:
-            images = images.transpose(2, 0, 1)
-
-        label = row[self.cols].values.astype(np.float16)
         return {
-            "image": torch.tensor(images, dtype=torch.float),
-            # "image": images,
-            "target": torch.tensor(label, dtype=torch.float)
+            "image": torch.tensor(images_only, dtype=torch.float),
+            "target": torch.tensor([0], dtype=torch.float),
+            "mask": torch.tensor(mask, dtype=torch.float),
         }
-
 
 # =============================================================================
 # one epoch
@@ -272,13 +218,16 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
                 break
 
         inputs = data["image"].to(device)
-        target = data["target"].to(device)
+        target_mask = data["mask"].to(device)
+        # print(inputs.shape)
+        # print("######################################")
+        # print(target_mask.shape)
 
         bs = inputs.shape[0]
 
         with autocast(enabled=use_amp):
             output = model(inputs)
-            loss = criterion(output, target).mean()
+            loss = criterion(output, target_mask).mean()
 
         if accumulation_steps > 1:
             loss_bw = loss / accumulation_steps
@@ -294,18 +243,15 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
             scaler.update()
 
         meters_dict["loss"].add(loss.item(), n=bs)
-        meters_dict["AP"].add(output=output.detach(), target=target)
-        progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]}")
+        text_progress_bar = f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]} "
+        progress_bar.set_description(text_progress_bar)
 
     LOGGER.info(f"Train loss: {meters_dict['loss'].value()[0]}")
-    LOGGER.info(f"Train mAP: {meters_dict['AP'].value().mean()}")
     LOGGER.info(f"Train time: {(time.time() - train_time) / 60:.3f} min")
 
     wandb.log({
         f"epoch": e,
         f"Loss/train_cv{cv}": meters_dict['loss'].value()[0],
-        f"mAP/train_cv{cv}": meters_dict['AP'].value().mean(),
-        f"mAP_metrics/train_cv{cv}": (2 * meters_dict['AP'].value().mean()) / 3,
     })
 
 
@@ -327,70 +273,28 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
                 break
 
         inputs = data["image"].to(device)
-        target = data["target"].to(device)
+        target_mask = data["mask"].to(device)
 
         bs = inputs.shape[0]
 
-        with torch.no_grad():
+        with autocast(enabled=use_amp):
             output = model(inputs)
-            loss = criterion(output, target).mean()
+            loss = criterion(output, target_mask).mean()
 
         meters_dict["loss"].add(loss.item(), n=bs)
-        meters_dict["AP"].add(output=output, target=target)
         progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]}")
 
     LOGGER.info(f"Val loss: {meters_dict['loss'].value()[0]}")
-    LOGGER.info(f"Val mAP: {meters_dict['AP'].value().mean()}")
-    LOGGER.info(f"Val mAP score: {(2 * meters_dict['AP'].value().mean()) / 3}")
     LOGGER.info(f"Val time: {(time.time() - val_time) / 60:.3f} min")
 
     log_dict = {
         f"epoch": e,
         f"Loss/val_cv{cv}": meters_dict['loss'].value()[0],
-        f"mAP/val_cv{cv}": meters_dict['AP'].value().mean(),
-        f"mAP_metrics_old/val_cv{cv}": (2 * meters_dict['AP'].value()[:4].mean()) / 3
     }
- 
-    for n_t, t in enumerate(target_columns):
-        log_dict[f"AP_{t}/val_cv{cv}"] = meters_dict['AP'].value()[n_t]
     wandb.log(log_dict)
 
-    return meters_dict['AP'].value().mean()
+    return meters_dict['loss'].value()[0], inputs, target_mask, output.sigmoid()
 
-
-# def get_train_transforms(image_size):
-#     return albumentations.Compose([
-#            albumentations.ShiftScaleRotate(rotate_limit=30, shift_limit=0, p=0.5),
-#         #    albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-#            albumentations.HorizontalFlip(p=0.5),
-#            albumentations.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=5, val_shift_limit=5, p=0.5),
-#            albumentations.RandomBrightnessContrast(brightness_limit=(-0.2,0.2), contrast_limit=(-0.2, 0.2), p=0.5),
-#            albumentations.CLAHE(clip_limit=(1, 4), p=0.5),
-#         #    albumentations.OneOf([
-#         #        albumentations.OpticalDistortion(distort_limit=1.0),
-#         #        albumentations.GridDistortion(num_steps=5, distort_limit=1.),
-#         #        albumentations.ElasticTransform(alpha=3),
-#         #    ], p=0.2),
-#            albumentations.OneOf([
-#                albumentations.GaussNoise(var_limit=[10, 50]),
-#                albumentations.GaussianBlur(),
-#                albumentations.MotionBlur(),
-#             #    albumentations.MedianBlur(),
-#            ], p=0.1),
-#           albumentations.Resize(image_size, image_size),
-#         #   albumentations.OneOf([
-#         #       albumentations.augmentations.transforms.JpegCompression(),
-#         #       albumentations.augmentations.transforms.Downscale(scale_min=0.1, scale_max=0.15),
-#         #   ], p=0.2),
-#         #   albumentations.imgaug.transforms.IAAPiecewiseAffine(p=0.2),
-#         #   albumentations.imgaug.transforms.IAASharpen(p=0.2),
-#           albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=5, p=0.5),
-#         #   albumentations.Normalize(
-#         #       mean=[0.485, 0.456, 0.406],
-#         #       std=[0.229, 0.224, 0.225],
-#         #   ),
-#           ToTensorV2(p=1)
-# ])
 
 def get_train_transforms(image_size):
     return albumentations.Compose([
@@ -406,23 +310,8 @@ def get_train_transforms(image_size):
 
     albumentations.HueSaturationValue(hue_shift_limit=40, sat_shift_limit=40, val_shift_limit=0, p=0.75),
     albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.3, rotate_limit=30, border_mode=0, p=0.75),
-    CutoutV2(max_h_size=int(image_size * 0.4), max_w_size=int(image_size * 0.4), num_holes=1, p=0.75),
-    ToTensorV2(p=1)
-])
-
-def get_train_transforms2(image_size):
-    return albumentations.Compose([
-           albumentations.ShiftScaleRotate(rotate_limit=30, p=0.5),
-           albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-           albumentations.HorizontalFlip(p=0.5),
-           albumentations.RandomBrightnessContrast(brightness_limit=(-0.1,0.1), contrast_limit=(-0.1, 0.1), p=0.5),
-           albumentations.OneOf([
-               albumentations.GaussNoise(),
-               albumentations.MotionBlur(blur_limit=3),
-           ], p=0.1),
-          albumentations.Resize(image_size, image_size),
-          albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=2, p=0.5),
-          ToTensorV2(p=1)
+    CutoutV2(max_h_size=int(image_size * 0.2), max_w_size=int(image_size * 0.2), num_holes=2, p=0.75),
+    # ToTensorV2(p=1)
 ])
 
 
@@ -433,7 +322,7 @@ def get_val_transforms(image_size):
         #     mean=[0.485, 0.456, 0.406],
         #     std=[0.229, 0.224, 0.225],
         # ),
-        ToTensorV2(p=1)
+        # ToTensorV2(p=1)
 ])
 
 
@@ -528,7 +417,6 @@ if __name__ == "__main__":
         df = df.groupby("image_id").first().reset_index()
 
     cv_list = hold_out if hold_out else [0, 1, 2, 3, 4]
-    oof = np.zeros((len(df), len(target_columns)))
     best_eval_score_list = []
 
     for cv in cv_list:
@@ -539,7 +427,7 @@ if __name__ == "__main__":
 
         # wandb
         wandb.init(config=cfg, tags=[cfg['exp_name'], f"cv{cv}", model_name],
-                   project='siim-rsna-covid19-2021-2', entity='inoichan',
+                   project='siim-rsna-covid19-2021-segmentation', entity='inoichan',
                    name=f"{cfg['exp_name']}_cv{cv}_{model_name}", reinit=True)
 
         df_train = df[df.cv != cv].reset_index(drop=True)
@@ -564,7 +452,7 @@ if __name__ == "__main__":
         val_dataset = CustomDataset(df=df_val, image_size=img_size, clahe=clahe, mix=mix,
                                     transform=val_transform, use_npy=use_npy, mode="val")
         val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
-                                    pin_memory=False, num_workers=n_workers, drop_last=False)
+                                    pin_memory=False, num_workers=n_workers, drop_last=True)
 
         # plot_sample_images(val_dataset, sample_img_path, "val",  normalize="imagenet")
         plot_sample_images(val_dataset, sample_img_path, "val", normalize=None)
@@ -575,17 +463,9 @@ if __name__ == "__main__":
 
         optimizer = optim.AdamW(model.parameters(), lr=float(cfg["initial_lr"]), eps=1e-7)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=float(cfg["final_lr"]))
-        # scheduler = optim.lr_scheduler.OneCycleLR(optimizer, float(cfg["initial_lr"])) #(optimizer, T_max=n_epochs, eta_min=float(cfg["final_lr"]))
 
-        # warmup_epo = 1
-        # cosine_epo = n_epochs
-
-        # optimizer = optim.Adam(model.parameters(), lr=float(cfg["initial_lr"]), eps=1e-7)
-        # scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cosine_epo)
-        # scheduler_warmup = GradualWarmupSchedulerV2(optimizer, multiplier=10, total_epoch=warmup_epo, after_scheduler=scheduler_cosine)
-
-
-        criterion = nn.BCEWithLogitsLoss(reduction='none')
+        # criterion = nn.BCEWithLogitsLoss(reduction='none')
+        criterion = SymmetricLovaszLoss()
         scaler = GradScaler(enabled=use_amp)
 
         # load weight
@@ -595,11 +475,6 @@ if __name__ == "__main__":
             weight = torch.load(load_checkpoint, map_location=device)
             model.load_state_dict(weight["state_dict"])
             LOGGER.info(f"Successfully loaded model, model path: {load_checkpoint}")
-            optimizer.load_state_dict(["optimizer"])
-            for state in optimizer.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = v.to(device)
         else:
             LOGGER.info(f"Training from scratch..")
         LOGGER.info("-" * 10)
@@ -609,13 +484,12 @@ if __name__ == "__main__":
 
         # ==== TRAIN LOOP
 
-        best = -1
+        best = 100
         best_epoch = 0
         early_stopping_cnt = 0
 
         meters_dict = {
             "loss": AverageValueMeter(),
-            "AP": APMeter(),
         }
 
         for e in range(start_epoch , start_epoch + n_epochs):
@@ -627,7 +501,7 @@ if __name__ == "__main__":
                 # scheduler_warmup.step(e-1)
                 train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, meters_dict)
 
-            score = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
+            loss, inp, mask, pred = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
             scheduler.step()
 
             LOGGER.info('Saving last model ...')
@@ -638,9 +512,9 @@ if __name__ == "__main__":
                 "optimizer": optimizer.state_dict()
             }, model_save_path)
 
-            if best < score:
-                LOGGER.info(f'Best score update: {best:.5f} --> {score:.5f}')
-                best = score
+            if best > loss:
+                LOGGER.info(f'Best loss update: {best:.5f} --> {loss:.5f}')
+                best = loss
                 best_epoch = e
 
                 LOGGER.info('Saving best model ...')
@@ -652,6 +526,7 @@ if __name__ == "__main__":
                 }, model_save_path)
 
                 early_stopping_cnt = 0
+
             else:
                 # early stopping
                 early_stopping_cnt += 1
@@ -665,9 +540,29 @@ if __name__ == "__main__":
 
             best_eval_score_list.append(best)
             wandb.log({
-                "Best mAP": best,
-                # "Best mAP metrics": (2 * best) / 3,
+                "epoch": e,
+                "Best loss": best,
             })
+
+            if True: # e % 1 == 0 or e == 0:
+                sample_img = inp.cpu().numpy().transpose(0, 2, 3, 1)
+                sample_mask = mask.cpu().numpy()
+                sample_pred = pred.cpu().numpy()
+                
+                ax = plt.figure(figsize=(20, 20))
+                for sample_i in range(4):
+                    a_sample_img = sample_img[sample_i]
+                    plt.subplot(4, 3, sample_i*3+1)
+                    plt.imshow((a_sample_img*255).astype(np.uint8))
+                    plt.subplot(4, 3, sample_i*3+2)
+                    plt.imshow((sample_mask[sample_i]*255).astype(np.uint8))
+                    plt.subplot(4, 3, sample_i*3+3)
+                    plt.imshow((sample_pred[sample_i][0]*255).astype(np.uint8))
+                plt.tight_layout()
+                plt.savefig(os.path.join(plot_path, f"sample_result_cv{cv}_epoch{e}.png"))
+                plt.close()
+                del ax
+                wandb.log({f"example_pred_{e}": wandb.Image(os.path.join(plot_path, f"sample_result_cv{cv}_epoch{e}.png"))})
 
     #######################################
     ## Save oof

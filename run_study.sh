@@ -324,12 +324,152 @@
 # exp=exp314
 # python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
 
-# effb2, from exp313, qishen aug(-distort), drop random crop, use_amp=True, 5 target, adamw
+# # effb2, from exp313, qishen aug(-distort), drop random crop, use_amp=True, 5 target, adamw
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp315
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 m, from exp313, qishen aug, drop random crop, use_amp=True, 5 target, adamw
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp316
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# eff b2, from exp313, qishen aug, drop random crop, use_amp=True, 5 target, adamw, 1st
 # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
-exp=exp315
+# exp=exp317
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# exp=exp317_2nd
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff b2, from exp317, qishen aug, drop random crop, use_amp=True, 5 target, adamw, 1st, input 4 channels
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp318
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # 2nd
+# python siim-rsna-2021/exp/$exp/train_2nd.py -y siim-rsna-2021/exp/$exp/config_2nd.yaml
+
+# ==============================================
+# けろっぴモデル
+# ==============================================
+
+# # eff v2 m, from exp317, qishen aug, use_amp=True, 5 target, adamw
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp319
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff b3, from exp319, qishen aug, use_amp=True, 5 target, adamw, より再現
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp320
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff b3, from exp320, qishen aug, use_amp=True, 5 target, adamw, より再現, fold keropi
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp321
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff b3, from exp319, qishen aug, use_amp=True, 5 target, adamw, より再現, softmax
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp322
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+# ==============================================
+# Segmentation model
+# ==============================================
+
+# # segmentation
+# exp=exp001
+# python exp_seg_ranzcr/$exp/train.py -y exp_seg_ranzcr/$exp/config.yaml
+
+
+# # eff b3, from exp320, qishen aug, use_amp=True, 5 target, adamw, lung crop
+# exp=exp350
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+
+
+
+# # eff b3, from exp320, qishen aug, use_amp=True, 5 target, adamw, より再現, bug fix
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp323
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff b3, from exp350, qishen aug, use_amp=True, 5 target, adamw, lung crop, bug fix
+# exp=exp351
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff b3, from exp320, qishen aug, use_amp=True, 5 target, adamw, より再現, 384
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp324
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+####
+# New baseline
+####
+
+# # eff v2 m, from exp324, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp330
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 m, from exp324, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp331
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 m, from exp324, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp332
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+
+# # eff v2 m, from exp330, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp335
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 m, from exp330, qishen aug, use_amp=True, 1 target, adamw, より再現, 512, accum 2
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp333
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 m, from exp330, qishen aug, use_amp=True, 4 target, adamw, より再現, 512, accum 2
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp334
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+
+# # eff v2 m, from exp330, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz, cv4 lr high
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp336
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 m, from exp330, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz, cv4 lr low
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp337
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+# # eff b7, from exp335, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp338
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+# eff b5, from exp335, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz
+# https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+exp=exp339
 python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
 
-# eff v2 m, from exp315, qishen aug(-distort), drop random crop, use_amp=True, 5 target, adamw
-# https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
-exp=exp316
-python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+
+
+
+

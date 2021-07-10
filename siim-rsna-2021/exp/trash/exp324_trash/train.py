@@ -79,52 +79,84 @@ def set_bn_eval(m):
 # Model
 # =============================================================================
 
-# class Net(nn.Module):
-#     def __init__(self, name="resnest101e"):
-#         super(Net, self).__init__()
-#         self.model = timm.create_model(name, pretrained=True, num_classes=len(target_columns))
-
-#     def forward(self, x):
-#         x = self.model(x).squeeze(-1)
-#         return x
-
-n_ch = 3
 
 class Net(nn.Module):
     def __init__(self, name="resnest101e"):
         super(Net, self).__init__()
-        self.enet = timm.create_model(name, True)
-        self.dropout = nn.Dropout(0.5)
-        # self.enet.conv_stem.weight = nn.Parameter(self.enet.conv_stem.weight.repeat(1,n_ch//3+1,1,1)[:, :n_ch])
-        self.myfc = nn.Linear(self.enet.classifier.in_features, len(target_columns))
-        self.enet.classifier = nn.Identity()
+        enet = timm.create_model(name, True, drop_path_rate=0.2)
+        self.b0 = nn.Sequential(
+            enet.conv_stem,
+            enet.bn1,
+            enet.act1,
+        )
+        self.b1 = enet.blocks[0]
+        self.b2 = enet.blocks[1]
+        self.b3 = enet.blocks[2]
+        self.b4 = enet.blocks[3]
+        self.b5 = enet.blocks[4]
+        self.b6 = enet.blocks[5]
+        self.b7 = enet.blocks[6]
 
-    def extract(self, x):
-        return self.enet(x)
+        self.after_blocks = nn.Sequential(
+            enet.conv_head,
+            enet.bn2,
+            enet.act2
+        )
 
-    def forward(self, x):
-        x = self.extract(x)
+        self.global_pool = enet.global_pool
+        self.dropout = nn.Dropout(0.3)
+        # self.myfc = nn.Linear(enet.classifier.in_features, len(target_columns))
+        self.myfc = nn.Linear(enet.classifier.in_features, 4)
+        # self.enet.classifier = nn.Identity()
+
+        # ===============================
+        # Mask netfork after b5
+        # ===============================
+        self.mask = nn.Sequential(
+            # nn.Conv2d(176, 128, kernel_size=3, padding=1),
+            nn.Conv2d(136, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+
+        self.mask_head = nn.Conv2d(128, 1, kernel_size=1, padding=0)
+        self.mask_pool = nn.AdaptiveAvgPool2d(1)
+        self.none_head = nn.Linear(128, 1)
+
+
+    def forward(self, x, is_mask=True):
+        x = self.b0(x)
+        x = self.b1(x)
+        x = self.b2(x)
+        x = self.b3(x)
+        x = self.b4(x)
+        x = self.b5(x)
+        # =================================
+        # Mask net
+        # =================================
+        mask_ = self.mask(x)
+        mask = self.mask_head(mask_)
+
+        none = self.mask_pool(mask_).squeeze(-1).squeeze(-1)
+        none = self.none_head(none)
+
+
+        x = self.b6(x)
+        x = self.b7(x)
+
+        x = self.after_blocks(x)
+        x = self.global_pool(x)
         h = self.myfc(self.dropout(x))
-        return h
 
-from warmup_scheduler import GradualWarmupScheduler
+        h = torch.cat([h, none], -1)
 
-class GradualWarmupSchedulerV2(GradualWarmupScheduler):
-    def __init__(self, optimizer, multiplier, total_epoch, after_scheduler=None):
-        super(GradualWarmupSchedulerV2, self).__init__(optimizer, multiplier, total_epoch, after_scheduler)
-    def get_lr(self):
-        if self.last_epoch > self.total_epoch:
-            if self.after_scheduler:
-                if not self.finished:
-                    self.after_scheduler.base_lrs = [base_lr * self.multiplier for base_lr in self.base_lrs]
-                    self.finished = True
-                return self.after_scheduler.get_lr()
-            return [base_lr * self.multiplier for base_lr in self.base_lrs]
-        if self.multiplier == 1.0:
-            return [base_lr * (float(self.last_epoch) / self.total_epoch) for base_lr in self.base_lrs]
+        if is_mask:
+            return h, mask
         else:
-            return [base_lr * ((self.multiplier - 1.) * self.last_epoch / self.total_epoch + 1.) for base_lr in self.base_lrs]
-
+            return h
 
 # =============================================================================
 # Dataset
@@ -174,6 +206,7 @@ class CutoutV2(albumentations.DualTransform):
     def get_transform_init_args_names(self):
         return ("num_holes", "max_h_size", "max_w_size")
 
+
 class CustomDataset(Dataset):
     def __init__(self,
                  df,
@@ -185,7 +218,8 @@ class CustomDataset(Dataset):
                  use_npy=False,
                  ):
 
-        self.df = df.reset_index(drop=True)
+        self.df_bbox = df.reset_index(drop=True)
+        self.df = df.groupby("image_id").first().reset_index()
         self.image_size = image_size
         self.transform = transform
 
@@ -203,12 +237,28 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, index):
         row = self.df.iloc[index]
+        bbox_df = self.df_bbox[self.df_bbox.image_id == row.image_id]
 
         if self.use_npy:
             # images = np.load(row.npy_path)
             images = cv2.imread(row.npy_path)
         else:
             images = pydicom.read_file(row.dicom_path).pixel_array
+
+        # original image size
+        original_h = row["height"]
+        original_w = row["width"]
+        # add bbox info into images
+        bbox_mask = np.zeros((images.shape[0], images.shape[1]))
+        img_h = images.shape[0]
+        img_w = images.shape[1]
+        if bbox_df.iloc[0]["have_box"]:
+            for n_box in range(len(bbox_df)):
+                box_info = bbox_df.iloc[n_box]
+                bbox_mask[int(box_info["y"] / original_h) * img_h:int((box_info["y"]+box_info["h"]) / original_h) * img_h,
+                          int(box_info["x"] / original_w) * img_w:int((box_info["x"]+box_info["w"]) / original_w) * img_w] = 1. # 255.
+        # # add bbox mask into R of RGB
+        # images[:,:,0] = bbox_mask
 
         if self.clahe:
             single_channel = images[:, :, 0].astype(np.uint8)
@@ -229,17 +279,27 @@ class CustomDataset(Dataset):
             ]).transpose(1, 2, 0)
 
         if self.transform is not None:
-            images = self.transform(image=images)['image'] / 255                
+            aug = self.transform(image=images, mask=bbox_mask)                
+            images_only = aug['image'].astype(np.float32).transpose(2, 0, 1) / 255                
+            bbox_mask = aug['mask'].astype(np.float32)
+            bbox_mask = cv2.resize(bbox_mask, (int(self.image_size // 16), int(self.image_size // 16)))[None, :, :]
         else:
             images = images.transpose(2, 0, 1)
 
         label = row[self.cols].values.astype(np.float16)
+
+        # images_w_mask = torch.stack([
+        #     # bbox_mask[0],
+        #     images_only[1],
+        #     images_only[2]
+        # ])
+
         return {
-            "image": torch.tensor(images, dtype=torch.float),
-            # "image": images,
+            "image": torch.tensor(images_only, dtype=torch.float),
+            # "image_w_mask": torch.tensor(images_w_mask, dtype=torch.float),
+            "mask": torch.tensor(bbox_mask, dtype=torch.float),
             "target": torch.tensor(label, dtype=torch.float)
         }
-
 
 # =============================================================================
 # one epoch
@@ -273,12 +333,15 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
 
         inputs = data["image"].to(device)
         target = data["target"].to(device)
+        target_mask = data["mask"].to(device)
 
         bs = inputs.shape[0]
 
         with autocast(enabled=use_amp):
-            output = model(inputs)
-            loss = criterion(output, target).mean()
+            output, output_mask = model(inputs)
+            loss_cls = criterion(output, target).mean()
+            loss_mask = criterion(output_mask, target_mask).mean()
+            loss = loss_cls + loss_mask
 
         if accumulation_steps > 1:
             loss_bw = loss / accumulation_steps
@@ -293,11 +356,17 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
             scaler.step(optimizer)
             scaler.update()
 
-        meters_dict["loss"].add(loss.item(), n=bs)
+        meters_dict["loss"].add(loss_cls.item(), n=bs)
+        meters_dict["loss_mask"].add(loss_mask.item(), n=bs)
+        meters_dict["loss_total"].add(loss.item(), n=bs)
         meters_dict["AP"].add(output=output.detach(), target=target)
-        progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]}")
+        text_progress_bar = f"loss: {loss.item()} loss(avg): {meters_dict['loss_total'].value()[0]} " + \
+            f"loss_cls(avg): {meters_dict['loss'].value()[0]} loss_mask(avg): {meters_dict['loss_mask'].value()[0]}"
+        progress_bar.set_description(text_progress_bar)
 
     LOGGER.info(f"Train loss: {meters_dict['loss'].value()[0]}")
+    LOGGER.info(f"Train loss_mask: {meters_dict['loss_mask'].value()[0]}")
+    LOGGER.info(f"Train loss_total: {meters_dict['loss_total'].value()[0]}")
     LOGGER.info(f"Train mAP: {meters_dict['AP'].value().mean()}")
     LOGGER.info(f"Train time: {(time.time() - train_time) / 60:.3f} min")
 
@@ -328,25 +397,34 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
 
         inputs = data["image"].to(device)
         target = data["target"].to(device)
+        target_mask = data["mask"].to(device)
 
         bs = inputs.shape[0]
 
-        with torch.no_grad():
-            output = model(inputs)
-            loss = criterion(output, target).mean()
+        with autocast(enabled=use_amp):
+            output, output_mask = model(inputs)
+            loss_cls = criterion(output, target).mean()
+            loss_mask = criterion(output_mask, target_mask).mean()
+            loss = loss_cls + loss_mask
 
-        meters_dict["loss"].add(loss.item(), n=bs)
+        meters_dict["loss"].add(loss_cls.item(), n=bs)
+        meters_dict["loss_mask"].add(loss_mask.item(), n=bs)
+        meters_dict["loss_total"].add(loss.item(), n=bs)
         meters_dict["AP"].add(output=output, target=target)
         progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]}")
 
     LOGGER.info(f"Val loss: {meters_dict['loss'].value()[0]}")
+    LOGGER.info(f"Val loss_mask: {meters_dict['loss_mask'].value()[0]}")
+    LOGGER.info(f"Val loss_total: {meters_dict['loss_total'].value()[0]}")
     LOGGER.info(f"Val mAP: {meters_dict['AP'].value().mean()}")
-    LOGGER.info(f"Val mAP score: {(2 * meters_dict['AP'].value().mean()) / 3}")
+    LOGGER.info(f"Val mAP score: {(2 * meters_dict['AP'].value()[:4].mean()) / 3}")
     LOGGER.info(f"Val time: {(time.time() - val_time) / 60:.3f} min")
 
     log_dict = {
         f"epoch": e,
         f"Loss/val_cv{cv}": meters_dict['loss'].value()[0],
+        f"Loss_Mask/val_cv{cv}": meters_dict['loss_mask'].value()[0],
+        f"Loss_Total/val_cv{cv}": meters_dict['loss_total'].value()[0],
         f"mAP/val_cv{cv}": meters_dict['AP'].value().mean(),
         f"mAP_metrics_old/val_cv{cv}": (2 * meters_dict['AP'].value()[:4].mean()) / 3
     }
@@ -355,42 +433,9 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
         log_dict[f"AP_{t}/val_cv{cv}"] = meters_dict['AP'].value()[n_t]
     wandb.log(log_dict)
 
-    return meters_dict['AP'].value().mean()
+    return meters_dict['AP'].value().mean(), (2 * meters_dict['AP'].value()[:4].mean()) / 3
 
 
-# def get_train_transforms(image_size):
-#     return albumentations.Compose([
-#            albumentations.ShiftScaleRotate(rotate_limit=30, shift_limit=0, p=0.5),
-#         #    albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-#            albumentations.HorizontalFlip(p=0.5),
-#            albumentations.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=5, val_shift_limit=5, p=0.5),
-#            albumentations.RandomBrightnessContrast(brightness_limit=(-0.2,0.2), contrast_limit=(-0.2, 0.2), p=0.5),
-#            albumentations.CLAHE(clip_limit=(1, 4), p=0.5),
-#         #    albumentations.OneOf([
-#         #        albumentations.OpticalDistortion(distort_limit=1.0),
-#         #        albumentations.GridDistortion(num_steps=5, distort_limit=1.),
-#         #        albumentations.ElasticTransform(alpha=3),
-#         #    ], p=0.2),
-#            albumentations.OneOf([
-#                albumentations.GaussNoise(var_limit=[10, 50]),
-#                albumentations.GaussianBlur(),
-#                albumentations.MotionBlur(),
-#             #    albumentations.MedianBlur(),
-#            ], p=0.1),
-#           albumentations.Resize(image_size, image_size),
-#         #   albumentations.OneOf([
-#         #       albumentations.augmentations.transforms.JpegCompression(),
-#         #       albumentations.augmentations.transforms.Downscale(scale_min=0.1, scale_max=0.15),
-#         #   ], p=0.2),
-#         #   albumentations.imgaug.transforms.IAAPiecewiseAffine(p=0.2),
-#         #   albumentations.imgaug.transforms.IAASharpen(p=0.2),
-#           albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=5, p=0.5),
-#         #   albumentations.Normalize(
-#         #       mean=[0.485, 0.456, 0.406],
-#         #       std=[0.229, 0.224, 0.225],
-#         #   ),
-#           ToTensorV2(p=1)
-# ])
 
 def get_train_transforms(image_size):
     return albumentations.Compose([
@@ -399,30 +444,16 @@ def get_train_transforms(image_size):
     albumentations.RandomBrightness(limit=0.2, p=0.75),
     albumentations.RandomContrast(limit=0.2, p=0.75),
 
-    albumentations.OneOf([
-        albumentations.OpticalDistortion(distort_limit=1.),
-        albumentations.GridDistortion(num_steps=5, distort_limit=1.),
-    ], p=0.75),
+    # albumentations.OneOf([
+    #     albumentations.OpticalDistortion(distort_limit=1.),
+    #     albumentations.GridDistortion(num_steps=5, distort_limit=1.),
+    # ], p=0.75),
 
     albumentations.HueSaturationValue(hue_shift_limit=40, sat_shift_limit=40, val_shift_limit=0, p=0.75),
-    albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.3, rotate_limit=30, border_mode=0, p=0.75),
-    CutoutV2(max_h_size=int(image_size * 0.4), max_w_size=int(image_size * 0.4), num_holes=1, p=0.75),
-    ToTensorV2(p=1)
-])
-
-def get_train_transforms2(image_size):
-    return albumentations.Compose([
-           albumentations.ShiftScaleRotate(rotate_limit=30, p=0.5),
-           albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-           albumentations.HorizontalFlip(p=0.5),
-           albumentations.RandomBrightnessContrast(brightness_limit=(-0.1,0.1), contrast_limit=(-0.1, 0.1), p=0.5),
-           albumentations.OneOf([
-               albumentations.GaussNoise(),
-               albumentations.MotionBlur(blur_limit=3),
-           ], p=0.1),
-          albumentations.Resize(image_size, image_size),
-          albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=2, p=0.5),
-          ToTensorV2(p=1)
+    # albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.3, rotate_limit=30, border_mode=0, p=0.75),
+    albumentations.ShiftScaleRotate(shift_limit=0., scale_limit=0.2, rotate_limit=15, border_mode=0, p=0.75),
+    CutoutV2(max_h_size=int(image_size * 0.2), max_w_size=int(image_size * 0.2), num_holes=2, p=0.75),
+    # ToTensorV2(p=1)
 ])
 
 
@@ -433,7 +464,7 @@ def get_val_transforms(image_size):
         #     mean=[0.485, 0.456, 0.406],
         #     std=[0.229, 0.224, 0.225],
         # ),
-        ToTensorV2(p=1)
+        # ToTensorV2(p=1)
 ])
 
 
@@ -610,11 +641,14 @@ if __name__ == "__main__":
         # ==== TRAIN LOOP
 
         best = -1
+        best_score = -1
         best_epoch = 0
         early_stopping_cnt = 0
 
         meters_dict = {
             "loss": AverageValueMeter(),
+            "loss_mask": AverageValueMeter(),
+            "loss_total": AverageValueMeter(),
             "AP": APMeter(),
         }
 
@@ -627,7 +661,7 @@ if __name__ == "__main__":
                 # scheduler_warmup.step(e-1)
                 train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, meters_dict)
 
-            score = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
+            score, score_old = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
             scheduler.step()
 
             LOGGER.info('Saving last model ...')
@@ -641,6 +675,7 @@ if __name__ == "__main__":
             if best < score:
                 LOGGER.info(f'Best score update: {best:.5f} --> {score:.5f}')
                 best = score
+                best_score = score_old
                 best_epoch = e
 
                 LOGGER.info('Saving best model ...')
@@ -666,7 +701,7 @@ if __name__ == "__main__":
             best_eval_score_list.append(best)
             wandb.log({
                 "Best mAP": best,
-                # "Best mAP metrics": (2 * best) / 3,
+                "Best mAP metrics": best_score,
             })
 
     #######################################

@@ -88,24 +88,39 @@ def set_bn_eval(m):
 #         x = self.model(x).squeeze(-1)
 #         return x
 
-n_ch = 3
+# n_ch = 3
 
 class Net(nn.Module):
-    def __init__(self, name="resnest101e"):
+    def __init__(self, name="resnest101e", n_ch=4):
         super(Net, self).__init__()
         self.enet = timm.create_model(name, True)
+
+        self.global_pool = self.enet.global_pool
+
         self.dropout = nn.Dropout(0.5)
-        # self.enet.conv_stem.weight = nn.Parameter(self.enet.conv_stem.weight.repeat(1,n_ch//3+1,1,1)[:, :n_ch])
+        self.enet.conv_stem.weight = nn.Parameter(self.enet.conv_stem.weight.repeat(1,n_ch//3+1,1,1)[:, :n_ch])
         self.myfc = nn.Linear(self.enet.classifier.in_features, len(target_columns))
         self.enet.classifier = nn.Identity()
 
     def extract(self, x):
-        return self.enet(x)
+        x = self.enet.conv_stem(x)
+        x = self.enet.bn1(x)
+        x = self.enet.act1(x)
+        x = self.enet.blocks(x)
+        x = self.enet.conv_head(x)
+        x = self.enet.bn2(x)
+        x = self.enet.act2(x)
+        return x
 
-    def forward(self, x):
-        x = self.extract(x)
+    def forward(self, x, is_emb=False):
+        emb = self.extract(x)
+        x = self.global_pool(emb)
         h = self.myfc(self.dropout(x))
-        return h
+        if is_emb:
+            return h, emb
+        else:
+            return h
+
 
 from warmup_scheduler import GradualWarmupScheduler
 
@@ -174,6 +189,7 @@ class CutoutV2(albumentations.DualTransform):
     def get_transform_init_args_names(self):
         return ("num_holes", "max_h_size", "max_w_size")
 
+
 class CustomDataset(Dataset):
     def __init__(self,
                  df,
@@ -185,7 +201,8 @@ class CustomDataset(Dataset):
                  use_npy=False,
                  ):
 
-        self.df = df.reset_index(drop=True)
+        self.df_bbox = df.reset_index(drop=True)
+        self.df = df.groupby("image_id").first().reset_index()
         self.image_size = image_size
         self.transform = transform
 
@@ -203,12 +220,23 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, index):
         row = self.df.iloc[index]
+        bbox_df = self.df_bbox[self.df_bbox.image_id == row.image_id]
 
         if self.use_npy:
             # images = np.load(row.npy_path)
             images = cv2.imread(row.npy_path)
         else:
             images = pydicom.read_file(row.dicom_path).pixel_array
+
+        # add bbox info into images
+        bbox_mask = np.zeros((images.shape[0], images.shape[1]))
+        if bbox_df.iloc[0]["have_box"]:
+            for n_box in range(len(bbox_df)):
+                box_info = bbox_df.iloc[n_box]
+                bbox_mask[int(box_info["y"]):int(box_info["y"]+box_info["h"]),
+                          int(box_info["x"]):int(box_info["x"]+box_info["w"])] = 1. # 255.
+        # # add bbox mask into R of RGB
+        # images[:,:,0] = bbox_mask
 
         if self.clahe:
             single_channel = images[:, :, 0].astype(np.uint8)
@@ -229,17 +257,27 @@ class CustomDataset(Dataset):
             ]).transpose(1, 2, 0)
 
         if self.transform is not None:
-            images = self.transform(image=images)['image'] / 255                
+            aug = self.transform(image=images, mask=bbox_mask)                
+            images_only = aug['image'] / 255                
+            bbox_mask = aug['mask']                
         else:
             images = images.transpose(2, 0, 1)
 
         label = row[self.cols].values.astype(np.float16)
+
+        images_w_mask = torch.stack([
+            bbox_mask,
+            images_only[0],
+            images_only[1],
+            images_only[2],
+        ])
+
         return {
-            "image": torch.tensor(images, dtype=torch.float),
+            "image": torch.tensor(images_only, dtype=torch.float),
+            "image_w_mask": torch.tensor(images_w_mask, dtype=torch.float),
             # "image": images,
             "target": torch.tensor(label, dtype=torch.float)
         }
-
 
 # =============================================================================
 # one epoch
@@ -271,7 +309,7 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
             if step_train == 2:
                 break
 
-        inputs = data["image"].to(device)
+        inputs = data["image_w_mask"].to(device)
         target = data["target"].to(device)
 
         bs = inputs.shape[0]
@@ -326,7 +364,7 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
             if step_val == 2:
                 break
 
-        inputs = data["image"].to(device)
+        inputs = data["image_w_mask"].to(device)
         target = data["target"].to(device)
 
         bs = inputs.shape[0]
@@ -358,40 +396,6 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
     return meters_dict['AP'].value().mean()
 
 
-# def get_train_transforms(image_size):
-#     return albumentations.Compose([
-#            albumentations.ShiftScaleRotate(rotate_limit=30, shift_limit=0, p=0.5),
-#         #    albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-#            albumentations.HorizontalFlip(p=0.5),
-#            albumentations.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=5, val_shift_limit=5, p=0.5),
-#            albumentations.RandomBrightnessContrast(brightness_limit=(-0.2,0.2), contrast_limit=(-0.2, 0.2), p=0.5),
-#            albumentations.CLAHE(clip_limit=(1, 4), p=0.5),
-#         #    albumentations.OneOf([
-#         #        albumentations.OpticalDistortion(distort_limit=1.0),
-#         #        albumentations.GridDistortion(num_steps=5, distort_limit=1.),
-#         #        albumentations.ElasticTransform(alpha=3),
-#         #    ], p=0.2),
-#            albumentations.OneOf([
-#                albumentations.GaussNoise(var_limit=[10, 50]),
-#                albumentations.GaussianBlur(),
-#                albumentations.MotionBlur(),
-#             #    albumentations.MedianBlur(),
-#            ], p=0.1),
-#           albumentations.Resize(image_size, image_size),
-#         #   albumentations.OneOf([
-#         #       albumentations.augmentations.transforms.JpegCompression(),
-#         #       albumentations.augmentations.transforms.Downscale(scale_min=0.1, scale_max=0.15),
-#         #   ], p=0.2),
-#         #   albumentations.imgaug.transforms.IAAPiecewiseAffine(p=0.2),
-#         #   albumentations.imgaug.transforms.IAASharpen(p=0.2),
-#           albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=5, p=0.5),
-#         #   albumentations.Normalize(
-#         #       mean=[0.485, 0.456, 0.406],
-#         #       std=[0.229, 0.224, 0.225],
-#         #   ),
-#           ToTensorV2(p=1)
-# ])
-
 def get_train_transforms(image_size):
     return albumentations.Compose([
     albumentations.Resize(image_size, image_size),
@@ -408,21 +412,6 @@ def get_train_transforms(image_size):
     albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.3, rotate_limit=30, border_mode=0, p=0.75),
     CutoutV2(max_h_size=int(image_size * 0.4), max_w_size=int(image_size * 0.4), num_holes=1, p=0.75),
     ToTensorV2(p=1)
-])
-
-def get_train_transforms2(image_size):
-    return albumentations.Compose([
-           albumentations.ShiftScaleRotate(rotate_limit=30, p=0.5),
-           albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-           albumentations.HorizontalFlip(p=0.5),
-           albumentations.RandomBrightnessContrast(brightness_limit=(-0.1,0.1), contrast_limit=(-0.1, 0.1), p=0.5),
-           albumentations.OneOf([
-               albumentations.GaussNoise(),
-               albumentations.MotionBlur(blur_limit=3),
-           ], p=0.1),
-          albumentations.Resize(image_size, image_size),
-          albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=2, p=0.5),
-          ToTensorV2(p=1)
 ])
 
 

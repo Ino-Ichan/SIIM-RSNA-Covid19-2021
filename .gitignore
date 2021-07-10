@@ -21,3 +21,5 @@ wandb
 local
 .local
 .netrc
+
+.bash*

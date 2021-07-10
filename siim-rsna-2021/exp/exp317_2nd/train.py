@@ -94,18 +94,33 @@ class Net(nn.Module):
     def __init__(self, name="resnest101e"):
         super(Net, self).__init__()
         self.enet = timm.create_model(name, True)
+
+        self.global_pool = self.enet.global_pool
+
         self.dropout = nn.Dropout(0.5)
         # self.enet.conv_stem.weight = nn.Parameter(self.enet.conv_stem.weight.repeat(1,n_ch//3+1,1,1)[:, :n_ch])
         self.myfc = nn.Linear(self.enet.classifier.in_features, len(target_columns))
         self.enet.classifier = nn.Identity()
 
     def extract(self, x):
-        return self.enet(x)
+        x = self.enet.conv_stem(x)
+        x = self.enet.bn1(x)
+        x = self.enet.act1(x)
+        x = self.enet.blocks(x)
+        x = self.enet.conv_head(x)
+        x = self.enet.bn2(x)
+        x = self.enet.act2(x)
+        return x
 
-    def forward(self, x):
-        x = self.extract(x)
+    def forward(self, x, is_emb=False):
+        emb = self.extract(x)
+        x = self.global_pool(emb)
         h = self.myfc(self.dropout(x))
-        return h
+        if is_emb:
+            return h, emb
+        else:
+            return h
+
 
 from warmup_scheduler import GradualWarmupScheduler
 
@@ -174,6 +189,7 @@ class CutoutV2(albumentations.DualTransform):
     def get_transform_init_args_names(self):
         return ("num_holes", "max_h_size", "max_w_size")
 
+
 class CustomDataset(Dataset):
     def __init__(self,
                  df,
@@ -185,7 +201,8 @@ class CustomDataset(Dataset):
                  use_npy=False,
                  ):
 
-        self.df = df.reset_index(drop=True)
+        self.df_bbox = df.reset_index(drop=True)
+        self.df = df.groupby("image_id").first().reset_index()
         self.image_size = image_size
         self.transform = transform
 
@@ -203,12 +220,23 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, index):
         row = self.df.iloc[index]
+        bbox_df = self.df_bbox[self.df_bbox.image_id == row.image_id]
 
         if self.use_npy:
             # images = np.load(row.npy_path)
             images = cv2.imread(row.npy_path)
         else:
             images = pydicom.read_file(row.dicom_path).pixel_array
+
+        # add bbox info into images
+        bbox_mask = np.zeros((images.shape[0], images.shape[1]))
+        if bbox_df.iloc[0]["have_box"]:
+            for n_box in range(len(bbox_df)):
+                box_info = bbox_df.iloc[n_box]
+                bbox_mask[int(box_info["y"]):int(box_info["y"]+box_info["h"]),
+                          int(box_info["x"]):int(box_info["x"]+box_info["w"])] = 1. # 255.
+        # # add bbox mask into R of RGB
+        # images[:,:,0] = bbox_mask
 
         if self.clahe:
             single_channel = images[:, :, 0].astype(np.uint8)
@@ -229,21 +257,32 @@ class CustomDataset(Dataset):
             ]).transpose(1, 2, 0)
 
         if self.transform is not None:
-            images = self.transform(image=images)['image'] / 255                
+            aug = self.transform(image=images, mask=bbox_mask)                
+            images_only = aug['image'] / 255                
+            bbox_mask = aug['mask']                
         else:
             images = images.transpose(2, 0, 1)
 
         label = row[self.cols].values.astype(np.float16)
+
+        images_w_mask = torch.stack([
+            bbox_mask,
+            images_only[1],
+            images_only[2]
+        ])
+
         return {
-            "image": torch.tensor(images, dtype=torch.float),
-            # "image": images,
+            "image": torch.tensor(images_only, dtype=torch.float),
+            "image_w_mask": torch.tensor(images_w_mask, dtype=torch.float),
             "target": torch.tensor(label, dtype=torch.float)
         }
-
 
 # =============================================================================
 # one epoch
 # =============================================================================
+
+WEIGHT_LABEL = 1.0
+WEIGHT_EMB = 0.5
 
 def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, meters_dict, mode="train"):
 
@@ -272,13 +311,19 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
                 break
 
         inputs = data["image"].to(device)
+        image_w_mask = data["image_w_mask"].to(device)
         target = data["target"].to(device)
 
         bs = inputs.shape[0]
 
         with autocast(enabled=use_amp):
-            output = model(inputs)
-            loss = criterion(output, target).mean()
+            with torch.no_grad():
+                _, emb_pre = premodel(image_w_mask, is_emb=True)
+
+            output, emb = model(inputs, is_emb=True)
+            loss_label = criterion[0](output, target).mean()
+            loss_emb = criterion[1](emb.view(bs, -1), emb_pre.view(bs, -1)).mean()
+            loss = WEIGHT_LABEL * loss_label + WEIGHT_EMB * loss_emb
 
         if accumulation_steps > 1:
             loss_bw = loss / accumulation_steps
@@ -293,17 +338,23 @@ def train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, 
             scaler.step(optimizer)
             scaler.update()
 
-        meters_dict["loss"].add(loss.item(), n=bs)
+        meters_dict["loss"].add(loss_label.item(), n=bs)
+        meters_dict["loss_emb"].add(loss_emb.item(), n=bs)
+        meters_dict["loss_2nd"].add(loss.item(), n=bs)
         meters_dict["AP"].add(output=output.detach(), target=target)
-        progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]}")
+        progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss_2nd'].value()[0]} loss_label(avg): {meters_dict['loss'].value()[0]} loss_emb(avg): {meters_dict['loss_emb'].value()[0]}")
 
     LOGGER.info(f"Train loss: {meters_dict['loss'].value()[0]}")
+    LOGGER.info(f"Train loss_emb: {meters_dict['loss_emb'].value()[0]}")
+    LOGGER.info(f"Train loss_2nd: {meters_dict['loss_2nd'].value()[0]}")
     LOGGER.info(f"Train mAP: {meters_dict['AP'].value().mean()}")
     LOGGER.info(f"Train time: {(time.time() - train_time) / 60:.3f} min")
 
     wandb.log({
         f"epoch": e,
         f"Loss/train_cv{cv}": meters_dict['loss'].value()[0],
+        f"Loss_Emb/train_cv{cv}": meters_dict['loss_emb'].value()[0],
+        f"Loss_2nd/train_cv{cv}": meters_dict['loss_2nd'].value()[0],
         f"mAP/train_cv{cv}": meters_dict['AP'].value().mean(),
         f"mAP_metrics/train_cv{cv}": (2 * meters_dict['AP'].value().mean()) / 3,
     })
@@ -327,26 +378,38 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
                 break
 
         inputs = data["image"].to(device)
+        image_w_mask = data["image_w_mask"].to(device)
         target = data["target"].to(device)
 
         bs = inputs.shape[0]
 
-        with torch.no_grad():
-            output = model(inputs)
-            loss = criterion(output, target).mean()
+        with autocast(enabled=use_amp):
+            with torch.no_grad():
+                _, emb_pre = premodel(image_w_mask, is_emb=True)
 
-        meters_dict["loss"].add(loss.item(), n=bs)
+            output, emb = model(inputs, is_emb=True)
+            loss_label = criterion[0](output, target).mean()
+            loss_emb = criterion[1](emb.view(bs, -1), emb_pre.view(bs, -1)).mean()
+            loss = WEIGHT_LABEL * loss_label + WEIGHT_EMB * loss_emb
+
+        meters_dict["loss"].add(loss_label.item(), n=bs)
+        meters_dict["loss_emb"].add(loss_emb.item(), n=bs)
+        meters_dict["loss_2nd"].add(loss.item(), n=bs)
         meters_dict["AP"].add(output=output, target=target)
         progress_bar.set_description(f"loss: {loss.item()} loss(avg): {meters_dict['loss'].value()[0]}")
 
     LOGGER.info(f"Val loss: {meters_dict['loss'].value()[0]}")
+    LOGGER.info(f"Val loss_emb: {meters_dict['loss_emb'].value()[0]}")
+    LOGGER.info(f"Val loss_2nd: {meters_dict['loss_2nd'].value()[0]}")
     LOGGER.info(f"Val mAP: {meters_dict['AP'].value().mean()}")
-    LOGGER.info(f"Val mAP score: {(2 * meters_dict['AP'].value().mean()) / 3}")
+    LOGGER.info(f"Val mAP score: {(2 * meters_dict['AP'].value()[:4].mean()) / 3}")
     LOGGER.info(f"Val time: {(time.time() - val_time) / 60:.3f} min")
 
     log_dict = {
         f"epoch": e,
         f"Loss/val_cv{cv}": meters_dict['loss'].value()[0],
+        f"Loss_Emb/val_cv{cv}": meters_dict['loss_emb'].value()[0],
+        f"Loss_2nd/val_cv{cv}": meters_dict['loss_2nd'].value()[0],
         f"mAP/val_cv{cv}": meters_dict['AP'].value().mean(),
         f"mAP_metrics_old/val_cv{cv}": (2 * meters_dict['AP'].value()[:4].mean()) / 3
     }
@@ -355,42 +418,8 @@ def val_one_epoch(val_dataloader, model, device, wandb, meters_dict, mode="val")
         log_dict[f"AP_{t}/val_cv{cv}"] = meters_dict['AP'].value()[n_t]
     wandb.log(log_dict)
 
-    return meters_dict['AP'].value().mean()
+    return meters_dict['AP'].value().mean(), (2 * meters_dict['AP'].value()[:4].mean()) / 3
 
-
-# def get_train_transforms(image_size):
-#     return albumentations.Compose([
-#            albumentations.ShiftScaleRotate(rotate_limit=30, shift_limit=0, p=0.5),
-#         #    albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-#            albumentations.HorizontalFlip(p=0.5),
-#            albumentations.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=5, val_shift_limit=5, p=0.5),
-#            albumentations.RandomBrightnessContrast(brightness_limit=(-0.2,0.2), contrast_limit=(-0.2, 0.2), p=0.5),
-#            albumentations.CLAHE(clip_limit=(1, 4), p=0.5),
-#         #    albumentations.OneOf([
-#         #        albumentations.OpticalDistortion(distort_limit=1.0),
-#         #        albumentations.GridDistortion(num_steps=5, distort_limit=1.),
-#         #        albumentations.ElasticTransform(alpha=3),
-#         #    ], p=0.2),
-#            albumentations.OneOf([
-#                albumentations.GaussNoise(var_limit=[10, 50]),
-#                albumentations.GaussianBlur(),
-#                albumentations.MotionBlur(),
-#             #    albumentations.MedianBlur(),
-#            ], p=0.1),
-#           albumentations.Resize(image_size, image_size),
-#         #   albumentations.OneOf([
-#         #       albumentations.augmentations.transforms.JpegCompression(),
-#         #       albumentations.augmentations.transforms.Downscale(scale_min=0.1, scale_max=0.15),
-#         #   ], p=0.2),
-#         #   albumentations.imgaug.transforms.IAAPiecewiseAffine(p=0.2),
-#         #   albumentations.imgaug.transforms.IAASharpen(p=0.2),
-#           albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=5, p=0.5),
-#         #   albumentations.Normalize(
-#         #       mean=[0.485, 0.456, 0.406],
-#         #       std=[0.229, 0.224, 0.225],
-#         #   ),
-#           ToTensorV2(p=1)
-# ])
 
 def get_train_transforms(image_size):
     return albumentations.Compose([
@@ -408,21 +437,6 @@ def get_train_transforms(image_size):
     albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.3, rotate_limit=30, border_mode=0, p=0.75),
     CutoutV2(max_h_size=int(image_size * 0.4), max_w_size=int(image_size * 0.4), num_holes=1, p=0.75),
     ToTensorV2(p=1)
-])
-
-def get_train_transforms2(image_size):
-    return albumentations.Compose([
-           albumentations.ShiftScaleRotate(rotate_limit=30, p=0.5),
-           albumentations.RandomResizedCrop(image_size, image_size, scale=(0.7, 1), p=1),
-           albumentations.HorizontalFlip(p=0.5),
-           albumentations.RandomBrightnessContrast(brightness_limit=(-0.1,0.1), contrast_limit=(-0.1, 0.1), p=0.5),
-           albumentations.OneOf([
-               albumentations.GaussNoise(),
-               albumentations.MotionBlur(blur_limit=3),
-           ], p=0.1),
-          albumentations.Resize(image_size, image_size),
-          albumentations.Cutout(max_h_size=int(image_size * 0.1), max_w_size=int(image_size * 0.1), num_holes=2, p=0.5),
-          ToTensorV2(p=1)
 ])
 
 
@@ -571,6 +585,8 @@ if __name__ == "__main__":
 
         # ==== INIT MODEL
         device = torch.device(device)
+        premodel = Net(model_name).to(device)
+        premodel.eval()
         model = Net(model_name).to(device)
 
         optimizer = optim.AdamW(model.parameters(), lr=float(cfg["initial_lr"]), eps=1e-7)
@@ -585,7 +601,10 @@ if __name__ == "__main__":
         # scheduler_warmup = GradualWarmupSchedulerV2(optimizer, multiplier=10, total_epoch=warmup_epo, after_scheduler=scheduler_cosine)
 
 
-        criterion = nn.BCEWithLogitsLoss(reduction='none')
+        criterion = [
+            nn.BCEWithLogitsLoss(reduction='none'),
+            nn.L1Loss(reduction='none')
+        ]
         scaler = GradScaler(enabled=use_amp)
 
         # load weight
@@ -593,13 +612,13 @@ if __name__ == "__main__":
         LOGGER.info("-" * 10)
         if os.path.exists(load_checkpoint):
             weight = torch.load(load_checkpoint, map_location=device)
-            model.load_state_dict(weight["state_dict"])
+            premodel.load_state_dict(weight["state_dict"])
             LOGGER.info(f"Successfully loaded model, model path: {load_checkpoint}")
-            optimizer.load_state_dict(["optimizer"])
-            for state in optimizer.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = v.to(device)
+            # optimizer.load_state_dict(["optimizer"])
+            # for state in optimizer.state.values():
+            #     for k, v in state.items():
+            #         if isinstance(v, torch.Tensor):
+            #             state[k] = v.to(device)
         else:
             LOGGER.info(f"Training from scratch..")
         LOGGER.info("-" * 10)
@@ -610,11 +629,14 @@ if __name__ == "__main__":
         # ==== TRAIN LOOP
 
         best = -1
+        best_score = -1
         best_epoch = 0
         early_stopping_cnt = 0
 
         meters_dict = {
             "loss": AverageValueMeter(),
+            "loss_emb": AverageValueMeter(),
+            "loss_2nd": AverageValueMeter(),
             "AP": APMeter(),
         }
 
@@ -627,7 +649,7 @@ if __name__ == "__main__":
                 # scheduler_warmup.step(e-1)
                 train_one_epoch(train_dataloader, model, device, criterion, use_amp, wandb, meters_dict)
 
-            score = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
+            score, score_old = val_one_epoch(val_dataloader, model, device, wandb, meters_dict)
             scheduler.step()
 
             LOGGER.info('Saving last model ...')
@@ -641,6 +663,7 @@ if __name__ == "__main__":
             if best < score:
                 LOGGER.info(f'Best score update: {best:.5f} --> {score:.5f}')
                 best = score
+                best_score = score_old
                 best_epoch = e
 
                 LOGGER.info('Saving best model ...')
@@ -666,7 +689,7 @@ if __name__ == "__main__":
             best_eval_score_list.append(best)
             wandb.log({
                 "Best mAP": best,
-                # "Best mAP metrics": (2 * best) / 3,
+                "Best mAP metrics": best_score,
             })
 
     #######################################
