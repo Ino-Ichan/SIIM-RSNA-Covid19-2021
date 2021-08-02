@@ -1,0 +1,63 @@
+debug: false
+# exp_name: "exp003"
+# exp_name: "exp011"
+# exp_name: "exp026"
+# exp_name: "exp031"
+# exp_name: "exp038"
+# exp_name: "exp039"
+# exp_name: "exp041"
+# exp_name: "exp301"
+# exp_name: "exp302"
+# exp_name: "exp306"
+# exp_name: "exp307"
+# exp_name: "exp308"
+# exp_name: "exp311"
+# exp_name: "exp313"
+# exp_name: "exp315"
+# exp_name: "exp316"
+# exp_name: "exp317"
+# exp_name: "exp319"
+# exp_name: "exp409"
+exp_name: "exp410"
+model_name: "tf_efficientnetv2_m_in21k"
+# model_name: "tf_efficientnet_b2_ns"
+device_id: 0
+batch_size: 8
+img_size: 640
+n_workers: 20
+n_epochs: 30
+start_epoch: 1
+transform: true
+
+initial_lr: 1e-4
+final_lr: 1e-5
+
+load_checkpoint:
+  - ""
+  - ""
+  - ""
+  - ""
+  - ""
+
+hold_out:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+
+df_train_path: "/workspace/data/df_train_study_level_npy640_3_w_bbox.csv"
+
+accumulation_steps: 1
+early_stopping_steps: 10
+freeze_bn: false
+
+fold_name: 'cv'
+
+clahe: false
+mix: false
+
+use_amp: true
+use_npy: true
+
+use_bbox: true

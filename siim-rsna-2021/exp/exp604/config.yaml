@@ -1,0 +1,70 @@
+debug: false
+# exp_name: "exp003"
+# exp_name: "exp011"
+# exp_name: "exp026"
+# exp_name: "exp031"
+# exp_name: "exp038"
+# exp_name: "exp039"
+# exp_name: "exp041"
+# exp_name: "exp301"
+# exp_name: "exp302"
+# exp_name: "exp306"
+# exp_name: "exp307"
+# exp_name: "exp308"
+# exp_name: "exp311"
+# exp_name: "exp313"
+# exp_name: "exp315"
+# exp_name: "exp316"
+# exp_name: "exp317"
+# exp_name: "exp319"
+# exp_name: "exp409"
+# exp_name: "exp413"
+# exp_name: "exp414"
+# exp_name: "exp415"
+# exp_name: "exp601"
+# exp_name: "exp603"
+exp_name: "exp604"
+model_name: "swin_base_patch4_window12_384"
+# model_name: "tf_efficientnet_b2_ns"
+device_id: 0
+batch_size: 16
+img_size: 384
+n_workers: 20
+n_epochs: 35
+start_epoch: 1
+transform: true
+
+# initial_lr: 1e-4
+# cv4
+initial_lr: 1e-4
+final_lr: 1e-5
+
+load_checkpoint:
+  - ""
+  - ""
+  - ""
+  - ""
+  - ""
+
+hold_out:
+  - 4
+  - 0
+  - 1
+  - 2
+  - 3
+
+df_train_path: "/workspace/data/df_train_study_level_npy640_3_w_bbox.csv"
+
+accumulation_steps: 2
+early_stopping_steps: 8
+freeze_bn: true
+
+fold_name: 'cv'
+
+clahe: false
+mix: false
+
+use_amp: true
+use_npy: true
+
+use_bbox: true

@@ -40,6 +40,6 @@ cd ..
 docker run -it --rm --name siim_rsna_yolov5\
  --gpus all --shm-size=100g\
  -v $PWD:/workspace\
- -p 5555:8888 -p 5005:6006 --ip=host\
+ -p 4444:8888 -p 4004:6006 --ip=host\
  siim-rsna-2021:yolov5
 ```
