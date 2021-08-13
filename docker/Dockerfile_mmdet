@@ -40,6 +40,7 @@ RUN conda install -y jupyter jupyterlab
 RUN conda install -y pandas scikit-learn matplotlib seaborn
 RUN pip install timm==0.4.9
 RUN pip install omegaconf==2.0.6
+RUN pip install effdet==0.2.4
 
 WORKDIR /workspace
 

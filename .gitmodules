@@ -7,3 +7,6 @@
 [submodule "customized_yolov5"]
 	path = customized_yolov5
 	url = https://github.com/Ino-Ichan/customized_yolov5
+[submodule "efficientdet-pytorch"]
+	path = efficientdet-pytorch
+	url = https://github.com/rwightman/efficientdet-pytorch

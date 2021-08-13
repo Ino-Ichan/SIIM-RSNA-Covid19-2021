@@ -15,3 +15,5 @@ RUN pip install numpy==1.20.0
 RUN pip install neptune-client==0.9.16
 RUN pip install iterative-stratification==0.1.6
 RUN pip install wandb==0.10.31
+RUN pip install pycocotools==2.0.2 omegaconf==2.1.0
+RUN pip install effdet==0.2.4 ensemble-boxes==1.0.6 fastcore==1.3.20 pytorch-lightning==1.3.5

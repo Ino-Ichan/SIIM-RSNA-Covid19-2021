@@ -111,7 +111,7 @@ model = dict(
                     target_stds=[0.1, 0.1, 0.2, 0.2]),
                 reg_class_agnostic=False,
                 reg_decoded_bbox=True,
-                norm_cfg=dict(type='SyncBN', requires_grad=True),
+                norm_cfg=dict(type='BN', requires_grad=True),
                 loss_cls=dict(
                     type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
                 loss_bbox=dict(type='GIoULoss', loss_weight=10.0)),
@@ -130,7 +130,7 @@ model = dict(
                     target_stds=[0.05, 0.05, 0.1, 0.1]),
                 reg_class_agnostic=False,
                 reg_decoded_bbox=True,
-                norm_cfg=dict(type='SyncBN', requires_grad=True),
+                norm_cfg=dict(type='BN', requires_grad=True),
                 loss_cls=dict(
                     type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
                 loss_bbox=dict(type='GIoULoss', loss_weight=10.0)),
@@ -149,19 +149,19 @@ model = dict(
                     target_stds=[0.033, 0.033, 0.067, 0.067]),
                 reg_class_agnostic=False,
                 reg_decoded_bbox=True,
-                norm_cfg=dict(type='SyncBN', requires_grad=True),
+                norm_cfg=dict(type='BN', requires_grad=True),
                 loss_cls=dict(
                     type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
                 loss_bbox=dict(type='GIoULoss', loss_weight=10.0))
         ],
-        mask_head=dict(
-            type='FCNMaskHead',
-            num_convs=4,
-            in_channels=256,
-            conv_out_channels=256,
-            num_classes=1,
-            loss_mask=dict(
-                type='CrossEntropyLoss', use_mask=True, loss_weight=1.0))
+        # mask_head=dict(
+        #     type='FCNMaskHead',
+        #     num_convs=4,
+        #     in_channels=256,
+        #     conv_out_channels=256,
+        #     num_classes=1,
+        #     loss_mask=dict(
+        #         type='CrossEntropyLoss', use_mask=True, loss_weight=1.0))
         ),
     test_cfg=dict(
         rpn=dict(
@@ -224,7 +224,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=8,
+    samples_per_gpu=1,
     workers_per_gpu=12,
     train=dict(
         type=dataset_type,

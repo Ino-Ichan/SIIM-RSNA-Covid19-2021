@@ -462,14 +462,55 @@
 # python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
 
 
-# eff b5, from exp335, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz
+# # eff b5, from exp335, qishen aug, use_amp=True, 5 target, adamw, より再現, 512, accum 2, lovaz
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp339
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+
+
+
+
+
+# ============================
+# Eff v2 l
+# ============================
+
+
+
+# # eff v2 l, from exp420, qishen aug, use_amp=True, 5 target, adamw, 512, accum 4, lovaz+bce layer 6&7
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp520
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+
+
+
+# ============================
+# Pseudo labeling
+# ============================
+
+
+
+# # eff v2 l, from exp420, qishen aug, use_amp=True, 5 target, adamw, 512, accum 4, lovaz+bce layer 6
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp751
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 l, from exp420, qishen aug, use_amp=True, 5 target, adamw, 512, accum 4, lovaz+bce layer 5,6,7
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp753
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+# # eff v2 l, from exp420, qishen aug, use_amp=True, 5 target, adamw, 512, accum 4, lovaz+bce layer 6,7
+# # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
+# exp=exp720
+# python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
+
+
+# eff v2 m, from exp420, qishen aug, use_amp=True, 5 target, adamw, 512, accum 4, lovaz+bce layer 6
 # https://www.kaggle.com/haqishen/ranzcr-1st-place-soluiton-cls-model-small-ver
-exp=exp339
+exp=exp714
 python siim-rsna-2021/exp/$exp/train.py -y siim-rsna-2021/exp/$exp/config.yaml
-
-
-
-
-
-
-
